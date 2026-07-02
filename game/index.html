@@ -104,7 +104,22 @@ window.addEventListener('resize',resize);resize();
 const WORLD_W=8400, SEA=505;
 const CAVE_A=5800, CAVE_B=7620;
 const BAY_A=3880, BAY_B=5280;
-const STONES=[[3900,4040],[4150,4280],[4395,4525],[4640,4770],[4885,5015],[5120,5260]];
+const STONES=[[3900,4060],[4160,4320],[4680,4860],[5000,5260]];
+const TSTONE=[4400,4600]; // 沉石：只有被高处看着才浮起
+function tideActive(){return A&&A.mode==='host'&&A.host&&A.host.id==='jelly';}
+function footingList(){
+  const f=[[3760,3902],...STONES,[5258,5400]];
+  if(tideActive())f.push(TSTONE);
+  return f.sort((a,b)=>a[0]-b[0]);}
+function footingInfo(x){
+  const fs=footingList();
+  let pe=-1e9,ns=1e9;
+  for(const f of fs){
+    if(x>=f[0]&&x<=f[1])return{t:'stone'};
+    if(f[1]<x)pe=Math.max(pe,f[1]);
+    if(f[0]>x)ns=Math.min(ns,f[0]);}
+  if(ns-pe<=175)return{t:'leap',p:clamp((x-pe)/(ns-pe),0,1)};
+  return{t:'water'};}
 function stoneAt(x){for(const s of STONES)if(x>=s[0]&&x<=s[1])return s;return null;}
 function inCave(x){return x>CAVE_A&&x<CAVE_B;}
 // 地面高度（y 向下为正）
@@ -116,8 +131,11 @@ function gBase(x){x=clamp(x,0,WORLD_W);
   for(let i=0;i<GPTS.length-1;i++){const a=GPTS[i],b=GPTS[i+1];
     if(x>=a[0]&&x<=b[0]){const t=(x-a[0])/(b[0]-a[0]);return lerp(a[1],b[1],ease(t));}}
   return 540;}
-function gY(x){ // 海湾区：踏石或深水
-  if(x>BAY_A&&x<BAY_B){const s=stoneAt(x);return s?532:585;}
+function gY(x){ // 海湾区：踏石 / 跃缝 / 深水
+  if(x>BAY_A&&x<BAY_B){const fi=footingInfo(x);
+    if(fi.t==='stone')return 532;
+    if(fi.t==='leap')return 532-Math.sin(Math.PI*fi.p)*22;
+    return 585;}
   return gBase(x)+Math.sin(x*0.013)*2.2;}
 function ceilY(x){ // 洞顶
   return gBase(x)-235-n1(x*0.004)*70-Math.sin(x*0.021)*16;}
@@ -172,8 +190,10 @@ function attPos(){ // 含过渡插值
   return t;}
 function setAttention(h){ // h===null → 人类之眼
   const cur=attPos();A.fx=cur.x;A.fy=cur.y;A.trans=1;
+  G.iris=1;
   if(h){A.mode='host';A.host=h;G.stats.hops++;
     const p=hostPos(h);A.ripples.push({x:p.x,y:p.y,t:0,ok:true});
+    if(G.stats.hops===1)G.firstHopFx=2.6; // 第一次：躯体高亮脉冲
     sfxHop();}
   else{A.mode='lens';}
 }
@@ -368,7 +388,8 @@ const BEATS=[
  {when:()=>P.x>3800&&!G.flags.bayIntro,run:()=>{G.flags.bayIntro=true;
    say('前蜕者','暗礁湾。人类的眼睛在这里会骗你。');
    say('前蜕者','往高处借一双。那只灯塔水母，看得见整个湾底。');
-   hint('注意力接力：萤 → 孢子 → 灯塔水母，从高处看清踏石',9);}},
+   say('前蜕者','石缝不用管，这具身体自己会跳。它比你熟练。');
+   hint('接力：萤 → 孢子 → 灯塔水母 · 被水母看着时，一直往右走',10);}},
  {when:()=>A.mode==='host'&&A.host&&A.host.id==='jelly'&&!G.flags.jellyDone,run:()=>{G.flags.jellyDone=true;
    say('前蜕者','现在你用的这双眼睛，没有长在任何人头上。习惯吗？');}},
  {when:()=>P.x>5340&&!G.flags.camp,run:()=>{G.flags.camp=true;startCS('camp');}},
@@ -512,6 +533,8 @@ function update(dt){
   crab.upd(dt);spore1.upd(dt);fly.upd(dt);bspore.upd(dt);jelly.upd(dt);guide.upd(dt);
   updDlg(dt);
   if(A.trans>0)A.trans=Math.max(0,A.trans-dt/0.27);
+  if(G.iris>0)G.iris=Math.max(0,G.iris-dt/.55);
+  if(G.firstHopFx>0)G.firstHopFx-=dt;
   for(let i=A.ripples.length-1;i>=0;i--){A.ripples[i].t+=dt;if(A.ripples[i].t>0.9)A.ripples.splice(i,1);}
   // 海葵门
   {const pNear=Math.abs(P.x-DOOR.x)<235;
@@ -530,14 +553,19 @@ function update(dt){
     if(DOOR.open<.5&&P.x>=DOOR.x&&P.x<DOOR.x+58)P.x=DOOR.x+58;
     P.gait+=Math.abs(P.vx)*dt*.085;
     // 落水
-    if(P.x>BAY_A+18&&P.x<BAY_B-12&&!stoneAt(P.x)){
-      P.splashT=1.4;G.stats.splash++;sfxSplash();
+    if(P.x>BAY_A+18&&P.x<BAY_B-12&&footingInfo(P.x).t==='water'){
+      P.splashT=1.4;P.splashFrom=P.x;G.stats.splash++;sfxSplash();
       puff(P.x,548,'#9fe8ff',30,90,1,3,40);
-      if(!G.flags.splashSaid){G.flags.splashSaid=true;say('前蜕者','潮水不记仇。再来。',3);}
+      if(P.x>TSTONE[0]-90&&P.x<TSTONE[1]+90&&!G.flags.tideSaid){G.flags.tideSaid=true;
+        say('前蜕者','看见水底那块沉石了吗。它是潮养的，认眼睛。',4.2);
+        say('前蜕者','只有被高处看着，它才肯浮起来。别把注意力挪开。',4.6);
+        hint('保持注意力在灯塔水母上，沉石会浮出水面',8);}
+      else if(!G.flags.splashSaid){G.flags.splashSaid=true;
+        say('前蜕者','潮水不记仇。再来。',3);}
     }
   }
   if(P.splashT>0){P.splashT-=dt;P.vx=0;
-    if(P.splashT<=0){P.x=BAY_A-70;}}
+    if(P.splashT<=0){P.x=(P.splashFrom||P.x)<4680?BAY_A-70:BAY_B+40;}}
   P.y=lerp(P.y,gY(P.x)-(P.lie?2:0),1-Math.pow(.0001,dt));
   // 人类之眼：计时 / 灼烧
   if(A.mode==='lens'&&G.mode==='play'){
@@ -570,8 +598,13 @@ function update(dt){
     else if(inCave(hostPos(A.host).x))zf=1.08;}
   CAM.zt=zf*(H/640);
   CAM.z=lerp(CAM.z,CAM.zt,1-Math.pow(.005,dt));
-  CAM.x=lerp(CAM.x,clamp(ap.x,430,WORLD_W-430),1-Math.pow(.002,dt));
-  CAM.y=lerp(CAM.y,ap.y-36,1-Math.pow(.002,dt));
+  // 取景略偏向躯体：让"被看着的自己"尽量留在画面里
+  let tx=ap.x,ty=ap.y-36;
+  if(A.mode==='host'){
+    tx+=clamp(P.x-ap.x,-420,420)*.24;
+    ty+=clamp(P.y-40-ap.y,-260,260)*.18;}
+  CAM.x=lerp(CAM.x,clamp(tx,430,WORLD_W-430),1-Math.pow(.002,dt));
+  CAM.y=lerp(CAM.y,ty,1-Math.pow(.002,dt));
   // 粒子
   for(let i=PARTS.length-1;i>=0;i--){const p=PARTS[i];p.life+=dt;
     p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy*=Math.pow(.5,dt);
@@ -681,7 +714,7 @@ function drawGround(){
   let first=true;
   for(let x=x0;x<=x1;x+=10){
     let yy=gY(x);
-    if(x>BAY_A&&x<BAY_B&&!stoneAt(x))yy=600; // 湾内深水底
+    if(x>BAY_A&&x<BAY_B&&footingInfo(x).t!=='stone')yy=600; // 湾内深水底
     const p=w2s(x,yy);
     if(first){ctx.moveTo(p.x,p.y);first=false;}else ctx.lineTo(p.x,p.y);}
   ctx.lineTo(w2s(x1,900).x,H+40);ctx.lineTo(w2s(x0,900).x,H+40);ctx.closePath();ctx.fill();
@@ -689,7 +722,7 @@ function drawGround(){
   ctx.strokeStyle='rgba(126,240,255,.14)';ctx.lineWidth=1.4;
   ctx.beginPath();first=true;
   for(let x=x0;x<=x1;x+=10){
-    if(x>BAY_A&&x<BAY_B&&!stoneAt(x)){first=true;continue;}
+    if(x>BAY_A&&x<BAY_B&&footingInfo(x).t!=='stone'){first=true;continue;}
     const p=w2s(x,gY(x));
     if(first){ctx.moveTo(p.x,p.y);first=false;}else ctx.lineTo(p.x,p.y);}
   ctx.stroke();
@@ -832,6 +865,23 @@ function drawDoor(){
 function drawStones(){
   if(CAM.x<BAY_A-900||CAM.x>BAY_B+900)return;
   const z=CAM.z;
+  // 沉石
+  {const cx=(TSTONE[0]+TSTONE[1])/2,hw=(TSTONE[1]-TSTONE[0])/2;
+   const up=tideActive();
+   TSTONE.rise=lerp(TSTONE.rise||0,up?1:0,.06);
+   const r=TSTONE.rise;
+   const p=w2s(cx,lerp(566,536,r));
+   ctx.globalAlpha=.3+.7*r;
+   ctx.fillStyle='#153048';
+   ctx.beginPath();ctx.ellipse(p.x,p.y,hw*z,14*z,0,0,TAU);ctx.fill();
+   ctx.strokeStyle=`rgba(126,240,255,${.15+.5*r})`;ctx.lineWidth=1.5;
+   ctx.beginPath();ctx.ellipse(p.x,p.y,hw*z,14*z,0,Math.PI,0);ctx.stroke();
+   ctx.globalAlpha=1;
+   if(r>.5){glow(p.x,p.y-8*z,26*z,'rgba(126,240,255,.6)',(r-.5)*.9);
+     if(Math.random()<.3)PARTS.push({x:cx+rand(-hw,hw),y:544,vx:rand(-4,4),
+       vy:rand(-26,-10),life:0,max:rand(.4,.9),c:'#9fe8ff',s:rand(.8,1.8)});}
+   else if(Math.random()<.05)PARTS.push({x:cx+rand(-hw,hw),y:556,vx:0,
+       vy:rand(-14,-6),life:0,max:rand(.5,1),c:'rgba(159,232,255,.5)',s:1.2});}
   for(const s of STONES){
     const cx=(s[0]+s[1])/2,hw=(s[1]-s[0])/2;
     const p=w2s(cx,536);
@@ -1072,11 +1122,12 @@ function drawPlayer(){
     const cx=(2+i*8)*f*s,cy=(-34+bob)*s;
     ctx.beginPath();ctx.moveTo(cx,cy);
     ctx.quadraticCurveTo(cx+3*f*s,cy-9*s,cx-2*f*s,(-46+bob-i)*s);ctx.stroke();}
-  // 生物光斑（脊线）
+  // 生物光斑（脊线）——被别的眼睛看着时，你是发光的那个
+  const watched=A.mode==='host'?1.5:1;
   for(let i=0;i<6;i++){
     const lx=(-18+i*10)*f*s,ly=(-31+bob+Math.sin(i)*2)*s;
     const tw=.5+.5*Math.sin(G.t*2+i*1.1);
-    glow(lx,ly,7*s,'rgba(126,240,255,.95)',(.3+.4*tw)*(A.mode==='lens'?1:.7));
+    glow(lx,ly,7*s,'rgba(126,240,255,.95)',(.3+.4*tw)*watched);
     ctx.fillStyle='#bdf3ff';ctx.beginPath();ctx.arc(lx,ly,1.6*s,0,TAU);ctx.fill();}
   glow(38*f*s,(-46+bob)*s,12*s,'rgba(126,240,255,.8)',.4*crest+.15);
   ctx.restore();
@@ -1119,8 +1170,9 @@ function drawLight(){
   let ar=A.mode==='lens'?(G.lensBurn?110:150):(A.host?A.host.lr:330);
   if(A.mode==='lens'&&inCave(P.x))ar=72;
   holeAt(ap.x,ap.y,ar,.96);
-  // 躯体微光
-  holeAt(P.x,P.y-40,95,.55);
+  // 躯体微光：被注视时，你是被照亮的那个
+  if(A.mode==='host')holeAt(P.x,P.y-40,140,.75);
+  else holeAt(P.x,P.y-40,95,.55);
   // 发光体自照
   for(const h of HOSTS){const p=hostPos(h);
     if(Math.abs(p.x-CAM.x)<W/CAM.z)holeAt(p.x,p.y,h.id==='fire'?200:(h.id==='fall'?160:60),.55);}
@@ -1131,6 +1183,46 @@ function drawLight(){
   ctx.drawImage(lcv,0,0,W,H);
 }
 
+/* ---------- 视线丝 / 「你」标记 ---------- */
+function drawGaze(){
+  if(G.mode==='title'||A.mode!=='host')return;
+  const ap=attPos(),hx=P.x,hy=P.y-46;
+  const d=dist(ap.x,ap.y,hx,hy);
+  if(d<55)return;
+  const a=w2s(ap.x,ap.y),b=w2s(hx,hy);
+  // 呼吸的注视丝：从注意点弯向躯体
+  const mx=(a.x+b.x)/2,my=Math.min(a.y,b.y)-40*CAM.z-Math.sin(G.t*1.2)*8;
+  ctx.save();
+  ctx.setLineDash([3,9]);ctx.lineDashOffset=-G.t*26;
+  ctx.strokeStyle='rgba(126,240,255,.30)';ctx.lineWidth=1.3;
+  ctx.beginPath();ctx.moveTo(a.x,a.y);
+  ctx.quadraticCurveTo(mx,my,b.x,b.y);ctx.stroke();
+  ctx.setLineDash([]);
+  // 躯体端：柔环
+  const pu=(G.t*.8)%1;
+  ctx.globalAlpha=(1-pu)*.4;
+  ctx.strokeStyle='#7ef0ff';ctx.lineWidth=1.4;
+  ctx.beginPath();ctx.arc(b.x,b.y,(22+pu*26)*CAM.z,0,TAU);ctx.stroke();
+  ctx.globalAlpha=1;
+  // 「你」标记
+  const bob=Math.sin(G.t*2)*4;
+  const fs=Math.max(13,15*CAM.z);
+  ctx.fillStyle='rgba(207,232,242,.85)';
+  ctx.font=fs+'px "Noto Serif SC",serif';ctx.textAlign='center';
+  ctx.shadowColor='rgba(126,240,255,.9)';ctx.shadowBlur=10;
+  ctx.fillText('你',b.x,b.y-52*CAM.z+bob);
+  ctx.shadowBlur=0;
+  ctx.strokeStyle='rgba(207,232,242,.6)';ctx.lineWidth=1.2;
+  ctx.beginPath();
+  ctx.moveTo(b.x-4,b.y-44*CAM.z+bob+3);ctx.lineTo(b.x,b.y-38*CAM.z+bob+3);
+  ctx.lineTo(b.x+4,b.y-44*CAM.z+bob+3);ctx.stroke();
+  ctx.textAlign='left';ctx.restore();
+  // 第一次注入：躯体高亮脉冲
+  if(G.firstHopFx>0){
+    const k=G.firstHopFx/2.6;
+    glow(b.x,b.y,90*CAM.z,'rgba(126,240,255,.8)',k*.5);
+  }
+}
 /* ---------- 宿主可达环 / 涟漪 ---------- */
 function drawHostRings(){
   if(G.mode!=='play')return;
@@ -1168,14 +1260,31 @@ function wrapZh(txt,maxW,fs){
     else line+=ch;}
   if(line)lines.push(line);return lines;}
 function drawUI(){
-  // 台词
+  // 台词（带底衬面板）
   if(DLG.cur){
     const d=DLG.cur,fadeIn=clamp(DLG.t/.5,0,1),fadeOut=clamp((d.hold+1-DLG.t)/.8,0,1);
     const a=Math.min(fadeIn,fadeOut);
     const fs=Math.min(20,W*.034);
     const lines=wrapZh(d.txt,W*.66,fs);
     const baseY=H-Math.max(96,H*.16);
-    ctx.globalAlpha=a*.85;
+    let mw=0;for(const l of lines)mw=Math.max(mw,ctx.measureText(l).width);
+    const panTop=baseY-lines.length*fs*1.6-fs*1.9,panBot=baseY+fs*.9;
+    ctx.globalAlpha=a*.6;
+    const pg=ctx.createLinearGradient(0,panTop,0,panBot);
+    pg.addColorStop(0,'rgba(5,10,24,0)');pg.addColorStop(.35,'rgba(5,10,24,.78)');
+    pg.addColorStop(1,'rgba(5,10,24,.78)');
+    ctx.fillStyle=pg;
+    ctx.beginPath();
+    if(ctx.roundRect)ctx.roundRect(W/2-mw/2-46,panTop,mw+92,panBot-panTop,14);
+    else ctx.rect(W/2-mw/2-46,panTop,mw+92,panBot-panTop);
+    ctx.fill();
+    // 侧饰线
+    ctx.strokeStyle='rgba(126,240,255,.35)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(W/2-mw/2-32,(panTop+panBot)/2-fs*.8);
+    ctx.lineTo(W/2-mw/2-32,(panTop+panBot)/2+fs*.8);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(W/2+mw/2+32,(panTop+panBot)/2-fs*.8);
+    ctx.lineTo(W/2+mw/2+32,(panTop+panBot)/2+fs*.8);ctx.stroke();
+    ctx.globalAlpha=a*.9;
     ctx.fillStyle='#7ef0ff';
     ctx.font=(fs*.72)+'px "Noto Serif SC",serif';
     ctx.textAlign='center';
@@ -1187,6 +1296,28 @@ function drawUI(){
       ctx.fillText(l,W/2,baseY-(lines.length-1-i)*fs*1.6);
       ctx.shadowBlur=0;});
     ctx.globalAlpha=1;ctx.textAlign='left';}
+  // 注意力状态牌（顶部）
+  if(G.mode==='play'||G.mode==='cutscene'){
+    const lens=A.mode==='lens';
+    const label=lens?'借来的人类之眼':(A.host?A.host.label:'');
+    const col=lens?(G.lensBurn?'#ff9a7a':'#ffd9a0'):(A.host?A.host.c:'#7ef0ff');
+    const fs2=Math.min(14,W*.024);
+    ctx.font=fs2+'px "Noto Serif SC",serif';
+    const tw2=ctx.measureText('注意 · '+label).width;
+    const bx=W/2-tw2/2-30,by=8,bw=tw2+60,bh=fs2*2.1;
+    ctx.globalAlpha=.72;
+    ctx.fillStyle='rgba(5,10,24,.6)';
+    ctx.beginPath();
+    if(ctx.roundRect)ctx.roundRect(bx,by,bw,bh,bh/2);else ctx.rect(bx,by,bw,bh);
+    ctx.fill();
+    ctx.strokeStyle='rgba(126,240,255,.18)';ctx.lineWidth=1;ctx.stroke();
+    // 宿主色点
+    glow(bx+20,by+bh/2,9,col,.7);
+    ctx.fillStyle=col;
+    ctx.beginPath();ctx.arc(bx+20,by+bh/2,3,0,TAU);ctx.fill();
+    ctx.fillStyle='#cfe8f2';ctx.textAlign='left';
+    ctx.fillText('注意 · '+label,bx+34,by+bh/2+fs2*.36);
+    ctx.globalAlpha=1;}
   // 提示
   if(G.t<HINT.until&&G.mode==='play'){
     const a=Math.min(clamp((G.t-HINT.start)/.5,0,1),clamp((HINT.until-G.t)/.8,0,1));
@@ -1208,7 +1339,36 @@ function drawUI(){
         const px=x+Math.cos(a2)*r,py=y+Math.sin(a2)*r*.8;
         if(a2===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);}
       ctx.stroke();}
+    ctx.fillStyle='rgba(255,217,160,.75)';
+    ctx.font='12px "Noto Serif SC",serif';
+    ctx.fillText(G.stats.shells+' / '+SHELLS.length,26+G.stats.shells*26,34);
     ctx.globalAlpha=1;}
+  // 人类之眼状态图标（右下）
+  if(G.mode==='play'){
+    const ex=W-42,ey=H-40;
+    const dead=G.lensDead,cool=G.lensCool>0,on=A.mode==='lens';
+    ctx.globalAlpha=dead?.22:.8;
+    ctx.strokeStyle=on?'#ffd9a0':'#7d93a5';ctx.lineWidth=1.6;
+    // 眼形
+    ctx.beginPath();ctx.moveTo(ex-14,ey);
+    ctx.quadraticCurveTo(ex,ey-11,ex+14,ey);
+    ctx.quadraticCurveTo(ex,ey+11,ex-14,ey);ctx.stroke();
+    ctx.beginPath();ctx.arc(ex,ey,4.4,0,TAU);ctx.stroke();
+    if(on)glow(ex,ey,16,'rgba(255,217,160,.8)',.5);
+    // 灼热弧
+    if(G.lensBurn&&!dead&&G.lensHeat>.1){
+      ctx.strokeStyle='#ff7a5c';ctx.lineWidth=2.2;
+      ctx.beginPath();ctx.arc(ex,ey,17,-Math.PI/2,-Math.PI/2+TAU*clamp(G.lensHeat/2.3,0,1));
+      ctx.stroke();}
+    if(cool){ctx.strokeStyle='rgba(125,147,165,.5)';ctx.lineWidth=2.2;
+      ctx.beginPath();ctx.arc(ex,ey,17,-Math.PI/2,-Math.PI/2+TAU*clamp(1-G.lensCool/1.6,0,1));
+      ctx.stroke();}
+    if(dead){ctx.strokeStyle='#7d93a5';ctx.lineWidth=1.6;
+      ctx.beginPath();ctx.moveTo(ex-16,ey+12);ctx.lineTo(ex+16,ey-12);ctx.stroke();}
+    ctx.globalAlpha=.5;
+    ctx.fillStyle='#7d93a5';ctx.font='10px "Noto Serif SC",serif';ctx.textAlign='center';
+    ctx.fillText(dead?'已随壳而去':'空格',ex,ey+27);
+    ctx.textAlign='left';ctx.globalAlpha=1;}
   // 动词囊图标
   if(G.bagHas&&G.mode==='play'){
     ctx.globalAlpha=.85;
@@ -1252,6 +1412,16 @@ function drawUI(){
     ctx.font=Math.min(16,W*.03)+'px "Noto Serif SC",serif';
     ctx.fillText('渡 来 计 划 · 第 三 千 潮',W/2,H*.3);
     ctx.textAlign='left';ctx.globalAlpha=1;}
+  // 注意力跳转的虹膜收放
+  if(G.iris>0){
+    const tt=1-G.iris;                     // 0→1
+    const k=Math.sin(Math.PI*tt);          // 收缩程度
+    const maxR=Math.hypot(W,H)*.62;
+    const rr=maxR*(1-.5*k);
+    const vg=ctx.createRadialGradient(W/2,H/2,rr*.7,W/2,H/2,rr);
+    vg.addColorStop(0,'rgba(2,5,14,0)');
+    vg.addColorStop(1,`rgba(2,5,14,${.75*k})`);
+    ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);}
   // 全屏淡入
   if(G.fade>0){ctx.fillStyle=`rgba(2,4,10,${G.fade})`;ctx.fillRect(0,0,W,H);}
 }
@@ -1337,6 +1507,7 @@ function frame(now){
   drawMotes();
   drawParts();
   drawLight();
+  drawGaze();
   drawHostRings();
   drawUI();
   drawBag();
